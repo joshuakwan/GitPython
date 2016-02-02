@@ -13,7 +13,6 @@ import shutil
 import platform
 import getpass
 import threading
-import logging
 
 # NOTE:  Some of the unused imports might be used/imported by others.
 # Handle once test-cases are back up and running.
@@ -165,8 +164,8 @@ class RemoteProgress(object):
     Handler providing an interface to parse progress information emitted by git-push
     and git-fetch and to dispatch callbacks allowing subclasses to react to the progress.
     """
-    _num_op_codes = 9
-    BEGIN, END, COUNTING, COMPRESSING, WRITING, RECEIVING, RESOLVING, FINDING_SOURCES, CHECKING_OUT = \
+    _num_op_codes = 8
+    BEGIN, END, COUNTING, COMPRESSING, WRITING, RECEIVING, RESOLVING, FINDING_SOURCES = \
         [1 << x for x in range(_num_op_codes)]
     STAGE_MASK = BEGIN | END
     OP_MASK = ~STAGE_MASK
@@ -175,8 +174,9 @@ class RemoteProgress(object):
     re_op_absolute = re.compile("(remote: )?([\w\s]+):\s+()(\d+)()(.*)")
     re_op_relative = re.compile("(remote: )?([\w\s]+):\s+(\d+)% \((\d+)/(\d+)\)(.*)")
 
-    def __init__(self):
+    def __init__(self, callback_func):
         self._seen_ops = list()
+        self.callback_func = callback_func
 
     def _parse_progress_line(self, line):
         """Parse progress information from the given line as retrieved by git-push
@@ -231,8 +231,6 @@ class RemoteProgress(object):
                 op_code |= self.RESOLVING
             elif op_name == 'Finding sources':
                 op_code |= self.FINDING_SOURCES
-            elif op_name == 'Checking out files':
-                op_code |= self.CHECKING_OUT
             else:
                 # Note: On windows it can happen that partial lines are sent
                 # Hence we get something like "CompreReceiving objects", which is
@@ -241,6 +239,7 @@ class RemoteProgress(object):
                 # to make sure we get informed in case the process spits out new
                 # commands at some point.
                 self.line_dropped(sline)
+                sys.stderr.write("Operation name %r unknown - skipping line '%s'" % (op_name, sline))
                 # Note: Don't add this line to the failed lines, as we have to silently
                 # drop it
                 return failed_lines
@@ -266,7 +265,8 @@ class RemoteProgress(object):
             self.update(op_code,
                         cur_count and float(cur_count),
                         max_count and float(max_count),
-                        message)
+                        message,
+                        self.callback_func)
         # END for each sub line
         return failed_lines
 
@@ -284,7 +284,7 @@ class RemoteProgress(object):
         """Called whenever a line could not be understood and was therefore dropped."""
         pass
 
-    def update(self, op_code, cur_count, max_count=None, message=''):
+    def update(self, op_code, cur_count, max_count=None, message='', callback_func=None):
         """Called whenever the progress changes
 
         :param op_code:
@@ -755,12 +755,3 @@ class WaitGroup(object):
         while self.count > 0:
             self.cv.wait()
         self.cv.release()
-
-
-class NullHandler(logging.Handler):
-    def emit(self, record):
-        pass
-
-# In Python 2.6, there is no NullHandler yet. Let's monkey-patch it for a workaround.
-if not hasattr(logging, 'NullHandler'):
-    logging.NullHandler = NullHandler
